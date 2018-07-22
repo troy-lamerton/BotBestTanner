@@ -13,7 +13,7 @@ import org.dreambot.api.wrappers.widgets.WidgetChild;
 import java.util.List;
 import java.awt.*;
 
-@ScriptManifest(name = "Best Leather Tanner", category = Category.MONEYMAKING, author = "codekiwi", version = 1.0)
+@ScriptManifest(name = "Best Leather Tanner", category = Category.MONEYMAKING, author = "codekiwi", version = 1.2)
 public class MainClass extends AbstractScript {
 
     /** static */
@@ -23,7 +23,7 @@ public class MainClass extends AbstractScript {
     /** grand exchange */
     // TODO: fetch current price from an api
     private int currentLeatherSellPrice = 106; // sells leather at this price or below
-    private static int BUY_COWHIDE_PRICE = 65; // buys cowhide at this price or higher
+    private int currentCowhideBuyPrice = 64; // buys cowhide at this price or higher
     private GrandExchangeHelper geHelper;
 
     /** status */
@@ -43,7 +43,6 @@ public class MainClass extends AbstractScript {
         SimpleTannerGUI gui = new SimpleTannerGUI(this);
         gui.setVisible(true);
         geHelper = new GrandExchangeHelper(this);
-
     }
 
     @Override
@@ -56,8 +55,12 @@ public class MainClass extends AbstractScript {
 
         if (this.needToUseGrandExchange) {
             if (geHelper.goToGrandExchange()) {
+                log("Arrived at grand exchange");
                 if (this.sellLeatherAndBuyCowhide()) {
+                    log("Sold leather and bought cowhide");
                     this.needToUseGrandExchange = false;
+                } else {
+                    log("---------FAILED TO SELL LEATHER and buy cowhide _________");
                 }
             }
         } else if (readyToTan) {
@@ -82,33 +85,38 @@ public class MainClass extends AbstractScript {
             }
         }
 
+        if (this.needToUseGrandExchange) {
+            return 2000;
+        }
         return 500;
     }
 
     private void bankForCowhides() {
         if (getBank().isOpen()) {
-            // deposit all except money
-            if (getInventory().onlyContains(995)) {
+            // continue when inventory contains coins or nothing
+            if (getInventory().isEmpty() || getInventory().onlyContains(995)) {
                 // check that there is enough cowhides and gp
                 Item coinsInBank = getBank().get(995);
                 int coins = getInventory().get(995) == null ? 0 : getInventory().get(995).getAmount();
                 if (coinsInBank != null) {
                     coins = coinsInBank.getAmount();
                     getBank().withdrawAll(995);
+                    sleepUntil(() -> getBank().count(995) <= 1, 8000);
                 }
 
                 Item cowhide = getBank().get(COWHIDE);
 
                 int cowhideAmount = cowhide == null ? 0 : cowhide.getAmount();
 
-                if (cowhideAmount >= 1 && coins >= cowhideAmount) {
+                if (cowhideAmount >= 27 && coins >= cowhideAmount) {
                     // withdraw Cowhide
                     if (getBank().withdrawAll(COWHIDE)) {
                         sleepUntil(() -> getInventory().contains(COWHIDE), 8000);
                     }
                 } else {
                     // not enough cowhides or gp
-                    log("Finished tanning all cowhides!");
+                    log("No more cowhides to tan (less than 27");
+                    log("Going to grand exchange...");
                     this.needToUseGrandExchange = true;
                 }
             } else {
@@ -159,18 +167,75 @@ public class MainClass extends AbstractScript {
         if (!getInventory().contains("Leather")) {
             geHelper.withdrawAllNoted("Leather");
         }
+        if (sleepUntil(() -> getInventory().contains("Leather"), 12000)) {
+            if (sleepUntil(() -> {
+                try {
+                    return this.sellLeather();
+                } catch (NoOpenSlots e) {
+                    log(e.getMessage());
+                    stop();
+                }
+                return false;
+            }, 180000)) {
+                // TODO: handle timeout
+                // leather sold and collected
+                sleep(200, 400);
 
-        if (geHelper.abortCurrentSell()) {
-            this.currentLeatherSellPrice -= 2;
-            log("trying to sell leather, price:" + String.valueOf(this.currentLeatherSellPrice));
-            try {
-                geHelper.sellAll("Leather", this.currentLeatherSellPrice);
-            } catch (NoOpenSlots e) {
-                log(e.getMessage());
-                stop();
+                if (sleepUntil(() -> {
+                    // buy more cowhide
+
+                    try {
+                        return this.buyCowhide();
+                    } catch (NoOpenSlots e) {
+                        log(e.getMessage());
+                        stop();
+                    }
+                    return false;
+                }, 180000)) {
+                    // TODO: handle timeout
+                    boolean timedOut = false;
+                    if (timedOut) {
+                        return false;
+                    }
+                    return true;
+                }
+
             }
         }
         return false;
+    }
+
+    private boolean sellLeather() throws NoOpenSlots {
+        if (geHelper.sellAll("Leather", this.currentLeatherSellPrice)) {
+            this.currentLeatherSellPrice++; // increase sell price for next time
+            return true;
+        } else {
+            if (geHelper.abortCurrentSell()) {
+                this.currentLeatherSellPrice -= 2;
+                if (this.currentLeatherSellPrice < 1) {
+                    // something went horribly wrong
+                    return false;
+                }
+                log("trying to sell leather, price:" + String.valueOf(this.currentLeatherSellPrice));
+            }
+            return this.sellLeather();
+        }
+    }
+
+    private boolean buyCowhide() throws NoOpenSlots {
+        int cowhideAmount = getInventory().count(995) / (this.currentCowhideBuyPrice + 1); // +1 to keep enough coins for tanning
+        if (geHelper.buy("Cowhide", this.currentCowhideBuyPrice, cowhideAmount)) {
+            this.currentCowhideBuyPrice--; // reduce buy price for next time
+            return true;
+        } else {
+            // took too long to buy
+            if (geHelper.abortCurrentBuy()) {
+                this.currentCowhideBuyPrice += 2;
+            }
+            log("trying to buy cowhide, price:" + String.valueOf(this.currentCowhideBuyPrice));
+            return this.buyCowhide();
+
+        }
     }
 
     // painting
@@ -201,6 +266,11 @@ public class MainClass extends AbstractScript {
 
     @Override
     public void onPause() {
+        boolean debugging = false;
+        if (debugging) {
+            this.geHelper.ctx = null;
+            this.geHelper = null;
+        }
         this.timeElapsedOnPause = timeRan.elapsed();
     }
     @Override
