@@ -13,16 +13,25 @@ import org.dreambot.api.wrappers.widgets.WidgetChild;
 import java.util.List;
 import java.awt.*;
 
-@ScriptManifest(name = "Best Leather Tanner", category = Category.MONEYMAKING, author = "codekiwi", version = 0.9)
+@ScriptManifest(name = "Best Leather Tanner", category = Category.MONEYMAKING, author = "codekiwi", version = 1.0)
 public class MainClass extends AbstractScript {
 
+    /** static */
     private static Area tannerArea = new Area(3271,3191,3277,3193, 0);
     private static int COWHIDE = 1739;
 
+    /** grand exchange */
+    // TODO: fetch current price from an api
+    private static int SELL_LEATHER_PRICE = 110; // sells leather at this price or below
+    private static int BUY_COWHIDE_PRICE = 64; // buys cowhide at this price or higher
+    private GrandExchangeHelper geHelper;
+
+    /** status */
     private boolean scriptStarted = false;
     private int totalTanned = 0;
     private Timer timeRan;
     private long timeElapsedOnPause = 0;
+    private boolean needToUseGrandExchange = false;
 
     void setStartScript() {
         this.scriptStarted = true;
@@ -33,6 +42,8 @@ public class MainClass extends AbstractScript {
     public void onStart() {
         SimpleTannerGUI gui = new SimpleTannerGUI(this);
         gui.setVisible(true);
+        geHelper = new GrandExchangeHelper(this);
+
     }
 
     @Override
@@ -41,25 +52,17 @@ public class MainClass extends AbstractScript {
             return 500;
         }
 
-        boolean gotCowhide = false;
-        boolean gotCoins = false;
+        boolean readyToTan = this.inventoryFullOfCowhidesAndCoins();
 
-        List<Item> items = getInventory().all();
-        for (Item item : items) {
-            if (item != null) {
-                if (item.getName().equals("Coins")) {
-                    if (item.getAmount() >= 27) {
-                        gotCoins = true;
-                    }
-                } else if (item.getID() == COWHIDE) {
-                    gotCowhide = true;
+        if (this.needToUseGrandExchange) {
+            if (geHelper.goToGrandExchange()) {
+                // sell leather
+                if (geHelper.withdrawAllNoted("Leather")) {
+                    geHelper.sellAll("Leather", SELL_LEATHER_PRICE);
                 }
+                // buy cowhides
             }
-        }
-
-        boolean readyToTan = gotCoins && gotCowhide;
-
-        if (readyToTan) {
+        } else if (readyToTan) {
             // tanning
             if(tannerArea.contains(getLocalPlayer())) {
                 this.tanHides();
@@ -87,13 +90,13 @@ public class MainClass extends AbstractScript {
     private void bankForCowhides() {
         if (getBank().isOpen()) {
             // deposit all except money
-            if (getInventory().isEmpty()) {
+            if (getInventory().onlyContains(995)) {
                 // check that there is enough cowhides and gp
                 Item coinsInBank = getBank().get(995);
-                int coins = 0;
+                int coins = getInventory().get(995) == null ? 0 : getInventory().get(995).getAmount();
                 if (coinsInBank != null) {
                     coins = coinsInBank.getAmount();
-                    getBank().withdrawAll("Coins");
+                    getBank().withdrawAll(995);
                 }
 
                 Item cowhide = getBank().get(COWHIDE);
@@ -108,15 +111,34 @@ public class MainClass extends AbstractScript {
                 } else {
                     // not enough cowhides or gp
                     log("Finished tanning all cowhides!");
-                    stop();
+                    this.needToUseGrandExchange = true;
                 }
             } else {
-                getBank().depositAllItems();
-                sleepUntil(getInventory()::isEmpty, 8000);
+                getBank().depositAllExcept(995);
+                sleepUntil(() -> getInventory().onlyContains(995) , 8000);
             }
         } else {
             getBank().open();
         }
+    }
+
+    private boolean inventoryFullOfCowhidesAndCoins() {
+        List<Item> items = getInventory().all();
+        boolean gotCoins = false;
+        for (Item item : items) {
+            if (item != null) {
+                if (item.getID() == 995) {
+                    if (item.getAmount() >= 27) {
+                        gotCoins = true;
+                    }
+                } else if (item.getID() != COWHIDE) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        return gotCoins;
     }
 
     private void tanHides() {
