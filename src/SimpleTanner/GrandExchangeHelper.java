@@ -39,8 +39,7 @@ class GrandExchangeHelper {
                     if (b.setWithdrawMode(BankMode.NOTE) && AbstractScript.sleepUntil(() -> b.getWithdrawMode() == BankMode.NOTE, 8000)) {
                         if (b.withdrawAll(item)) {
                             AbstractScript.sleep(Calculations.random(100, 300));
-                            b.close();
-                            return true;
+                            return AbstractScript.sleepUntil(b::close, 8000);
                         }
                     }
                 }
@@ -49,44 +48,60 @@ class GrandExchangeHelper {
         return false;
     }
 
-    boolean sellAll(String sellItem, int price) {
+    boolean sellAll(String sellItem, int price, int timeoutMs) throws NoOpenSlots {
         if(AbstractScript.sleepUntil(() -> ctx.getInventory().contains(item -> item != null && item.getName().equals(sellItem)), 8000)) {
             // item withdrawn
-            if (ctx.getBank().close()) {
-                GrandExchange ge = ctx.getGrandExchange();
-                // open exchange and sell item
-                int sellAmount = ctx.getInventory().get(sellItem).getAmount();
-                if (!ge.isOpen()) {
-                    ge.open();
-                } else {
-                    if (AbstractScript.sleepUntil(ge::isOpen, 8000)) {
-                        if (this.sellingInSlot < 0) {
-                            // not yet selling
-                            this.sellingInSlot = ge.getFirstOpenSlot();
-                            if (ge.openSellScreen(this.sellingInSlot)) {
-                                // sell all leather
-                                if (ge.sellItem(sellItem, sellAmount, price)) {
-                                    AbstractScript.sleep(Calculations.random(100, 300));
-                                    ge.confirm();
+            GrandExchange ge = ctx.getGrandExchange();
+            // open exchange and sell item
+            int sellAmount = ctx.getInventory().get(sellItem).getAmount();
+            if (!ge.isOpen()) {
+                ge.open();
+            } else {
+                if (AbstractScript.sleepUntil(ge::isOpen, 8000)) {
+                    if (this.sellingInSlot < 0) {
+                        // not yet selling
+                        this.sellingInSlot = ge.getFirstOpenSlot();
+                        if (ge.openSellScreen(this.sellingInSlot)) {
+                            // sell all leather
+                            if (ge.sellItem(sellItem, sellAmount, price)) {
+                                AbstractScript.sleep(Calculations.random(100, 300));
+                                ge.confirm();
+                                // waiting for sale to complete
+                                if (AbstractScript.sleepUntil(() -> ge.isReadyToCollect(this.sellingInSlot), Calculations.random(timeoutMs - 1000, timeoutMs + 1000))) {
+                                    if (ge.isReadyToCollect(this.sellingInSlot)) {
+                                        return ge.collect();
+                                    } else {
+                                        // timed out
+                                        return false;
+                                    }
                                 }
-                            } else {
-                                log("Cannot sell anything. All Grand Exchange slots are full.");
-                                return false;
+
                             }
                         } else {
-                            // waiting for sale to complete
-                            if (AbstractScript.sleepUntil(() -> ge.isReadyToCollect(this.sellingInSlot), 8000)) {
-                                if (ge.isReadyToCollect(this.sellingInSlot)) {
-                                    if (ge.collect()) {
-                                        return true;
-                                    }
-                                } else {
-                                    return this.sellAll(sellItem, price - 2);
-                                }
-                            }
+                            log("Cannot sell anything. All Grand Exchange slots are full.");
+                            throw new NoOpenSlots();
                         }
+                    } else {
+                        log("already selling, why you call sellAll again?");
                     }
                 }
+            }
+        }
+        return false;
+    }
+    boolean sellAll(String sellItem, int price) throws NoOpenSlots {
+        return sellAll(sellItem, price, 15000);
+    }
+
+    boolean abortCurrentSell() {
+        if (this.sellingInSlot < 0) {
+            return true;
+        }
+
+        GrandExchange ge = ctx.getGrandExchange();
+        if (ge.cancelOffer(this.sellingInSlot)) {
+            if (ge.collect()) {
+                return AbstractScript.sleepUntil(() -> !ge.isReadyToCollect(this.sellingInSlot), 8000);
             }
         }
         return false;

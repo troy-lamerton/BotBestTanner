@@ -22,8 +22,8 @@ public class MainClass extends AbstractScript {
 
     /** grand exchange */
     // TODO: fetch current price from an api
-    private static int SELL_LEATHER_PRICE = 110; // sells leather at this price or below
-    private static int BUY_COWHIDE_PRICE = 64; // buys cowhide at this price or higher
+    private int currentLeatherSellPrice = 106; // sells leather at this price or below
+    private static int BUY_COWHIDE_PRICE = 65; // buys cowhide at this price or higher
     private GrandExchangeHelper geHelper;
 
     /** status */
@@ -56,11 +56,9 @@ public class MainClass extends AbstractScript {
 
         if (this.needToUseGrandExchange) {
             if (geHelper.goToGrandExchange()) {
-                // sell leather
-                if (geHelper.withdrawAllNoted("Leather")) {
-                    geHelper.sellAll("Leather", SELL_LEATHER_PRICE);
+                if (this.sellLeatherAndBuyCowhide()) {
+                    this.needToUseGrandExchange = false;
                 }
-                // buy cowhides
             }
         } else if (readyToTan) {
             // tanning
@@ -155,6 +153,24 @@ public class MainClass extends AbstractScript {
                 }
             }
         }
+    }
+
+    private boolean sellLeatherAndBuyCowhide() {
+        if (!getInventory().contains("Leather")) {
+            geHelper.withdrawAllNoted("Leather");
+        }
+
+        if (geHelper.abortCurrentSell()) {
+            this.currentLeatherSellPrice -= 2;
+            log("trying to sell leather, price:" + String.valueOf(this.currentLeatherSellPrice));
+            try {
+                geHelper.sellAll("Leather", this.currentLeatherSellPrice);
+            } catch (NoOpenSlots e) {
+                log(e.getMessage());
+                stop();
+            }
+        }
+        return false;
     }
 
     // painting
